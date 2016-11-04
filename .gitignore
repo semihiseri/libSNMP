@@ -3,3 +3,8 @@
 ################################################################################
 
 /libSNMP/.vs/libSNMP/v14
+/libSNMP-example/Debug
+/libSNMP-example/Release
+/libSNMP-example/.vs
+/libSNMP-example/__vm
+/libSNMP-example
