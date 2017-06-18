@@ -42,17 +42,29 @@ void setup() {
 
   kedi.init();
 
-  unsigned char randomEngineID[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}; // Lenght = 8 - The snmpEngineID should have a length of 5-32. It can be anything.
-  kedi.setEngineID(randomEngineID, 8); // This function is to set engineID.
+  unsigned char randomEngineID[20]; // The snmpEngineID should have a length of 5-32. It can be anything.
+  int hede = 1234567890;
+  String(hede).toCharArray((char*) randomEngineID, 20);
+  Serial.print("Engine id: ");
+  for (int i = 0; i < 20; i++)
+  {
+	  randomEngineID[i] -= 48;
+	  Serial.print(randomEngineID[i], HEX);
+	  Serial.print(" ");
+  }
+  Serial.println("done");
+  kedi.setEngineID(randomEngineID, String(hede).length()); // This function is to set engineID.
+
   /*
    * This should be set before users are set. Or, users should be added once again after this function is called.
    * This is because key generation uses snmpEngineID. as engineID changes, authKeys has to change as well.
    * kedi.setEngineID(unsigned char* newEngineID, int engineIDLength);
    */
 
-  kedi.addUser("kedi", NOAUTH, NOPRIV, NULL, NULL); // Add an user named kedi and with noAuthNoPriv security level
-  kedi.addUser("hede", MD5, DES, "kedikedi", "kedikedi"); // Add an user named hede with authPriv security level -both authPass and privPass are kedikedi
-  kedi.addUser("hebe", SHA, NOPRIV, "hedebele", NULL); // Add an user named hede with authNoPriv security level -auth pass is hedebele
+  //kedi.addUser("kedi", NOAUTH, NOPRIV, NULL, NULL); // Add an user named kedi and with noAuthNoPriv security level
+  kedi.addUser("kedi", (authType) 0, (privType) 0, NULL, NULL);
+  kedi.addUser("hede", SHA, DES, "kedikedi", "kedikedi"); // Add an user named hede with authPriv security level -both authPass and privPass are kedikedi
+  kedi.addUser("hebe", SHA, NOPRIV, "hedebelelele", NULL); // Add an user named hede with authNoPriv security level -auth pass is hedebele
 
   strcpy(kedi.communityString, "kedikedi"); // This is a simple way to set a community string :)
 
@@ -104,12 +116,12 @@ void loop()
     }
     else if (x == 't')
     {
-      char trapip[16] = "192.168.1.101"; // This is the ip address of the trap receiver
+      char trapip[16] = "192.168.1.103"; // This is the ip address of the trap receiver
       
       Serial.println("Trap time!!");
       delay(100);
       kedi.sendTrapv3(trapip, sysUpTime, 8, "kedi", NOAUTH, NOPRIV);
-      kedi.sendTrapv2c(trapip, sysUpTime, 8, "heyoo");
+      kedi.sendTrapv2c(trapip, sysUpTime, 8, "public");
       /*
        * An explanation about trap functions
        * When the version is set to v2c, sendTrapv3 will simply print a message and return.

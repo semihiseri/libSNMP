@@ -77,50 +77,42 @@ void snmpMessage::setVersion(int ver)
 
 snmpMessage::snmpMessage() // Here a standard empty SNMP message template is built. Same template can be used for v1, v2c and v3.
 {
-//#ifndef SNMP_V2C
   this->setVersion(this->ver);
-//#endif
 }
 
 void snmpMessage::parseSNMP(unsigned char* rawData)
 {
-//#ifndef SNMP_V2C
-if (this->ver == 3)
-{
-  this->msgBody.parseSelf(rawData);
-  this->msgBody.parseChildren(); // Now we should have msgVersion, msgGlobalData, msgAuthEngine and msgData in their places.
-  this->msgGlobalData->parseChildren();
-  this->msgAuthEngineContainer->parseChildren();
-  this->msgAuthEngine->parseChildren();
+	if (this->ver == 3)
+	{
+		this->msgBody.parseSelf(rawData);
+		this->msgBody.parseChildren(); // Now we should have msgVersion, msgGlobalData, msgAuthEngine and msgData in their places.
+		this->msgGlobalData->parseChildren();
+		this->msgAuthEngineContainer->parseChildren();
+		this->msgAuthEngine->parseChildren();
   
-  // TODO: We may need to put some conditional here to check the flags and decrypt the message first. Because it can be encrypted.
-  if (!((this->msgFlags)->_content[0] & 0b00000010)) // Is encrypted?
-  {
-    this->parseFurther();
-  }
-  else
-  {
-    Serial.println("Encrypted!");
-  }
-}
-//#else
-else if (this->ver == 2)
-{
-  this->msgBody.parseSelf(rawData);
-  this->msgBody.parseChildren(); // Now we should have msgVersion, msgGlobalData, msgAuthEngine and msgData in their places.
-  this->data->parseChildren();
-  this->variableBindings->parseChildren();
-//#endif
-}
+		if (!((this->msgFlags)->_content[0] & 0b00000010)) // Is encrypted?
+		{
+			this->parseFurther();
+		}
+		else
+		{
+			Serial.println("Encrypted!");
+		}
+	}
+	else if (this->ver == 2)
+	{
+		this->msgBody.parseSelf(rawData);
+		this->msgBody.parseChildren(); // Now we should have msgVersion, msgGlobalData, msgAuthEngine and msgData in their places.
+		this->data->parseChildren();
+		this->variableBindings->parseChildren();
+	}
 }
 
 void snmpMessage::parseFurther() // If the incoming message is encrypted, this function should be called after decryption
 { 
-//#ifndef SNMP_V2C
   this->msgData->parseChildren();
   this->data->parseChildren();
   this->variableBindings->parseChildren();
-//#endif
 }
 
 int convertToStr(int input, unsigned char* buff) // TODO: Make this an actual function :D This one ought to return BER encoded integer. Returns length.
@@ -213,42 +205,6 @@ int des_cbc(unsigned char* input, int length, unsigned char* output, unsigned ch
   }
 }
 
-/*class snmpAgent
-{
-  public:
-    snmpAgent(); // Initializer
-    void fillOIDList(); // Internal function
-    int findOID(unsigned char* oid, int len); // Internal function
-    int findUser(unsigned char* userName, int len); // Internal function
-    void update(); // call this regularly :) This will handle everything
-    void updateUpTime(); // Updates upTime
-    void listen(); // Checks whether we have any incoming stuff
-    void check(); // Checks whether we need to send a trap
-    void sendTrap(int oidNo); // oidNo is the index number of OID in the oidList.
-    void addUser(const char* userName, authType auth, privType priv, const char* authPass, const char* privPass);
-    void addObject(unsigned char* oid, int oidLength, objectType type, void* content);
-    void addPermission(unsigned char* oidName, int oidLength, unsigned char* userName, int userLength, unsigned char permission);
-
-    snmpMessage message;
-    snmpObject objects[MAX_OBJECTS];
-    int numberOfObjects;
-    snmpUser users[MAX_USERS];
-    int numberOfUsers;
-    int localUpTime = 0;
-    int prevMillis = 0;
-    int notInTimeWindows = 0;
-    int unknownUserNames = 0;
-    int unknownEngineIDs = 0;
-    int unsupportedSecLevels = 0;
-    int wrongDigests = 0;
-    int decryptionErrors = 0;
-    unsigned char authDigest[12];
-    
-  
-    unsigned char engineID[20] = {0x80,0x00,0x1f,0x88,0x80,0x0c,0xc6,0xd3,0x47,0xde,0x36,0xca,0x57};
-    int engineIDLength = 13;
-};*/
-
 snmpAgent::snmpAgent()
 {
   this->numberOfObjects = 0;
@@ -310,6 +266,18 @@ void snmpAgent::addUser(const char* userName, authType auth, privType priv, cons
             }
             Serial.println();
           }
+		  else if (auth == SHA)
+		  {
+			  password_to_key_sha((unsigned char*)privPass, strlen(privPass), this->engineID, this->engineIDLength, (unsigned char*) this->users[this->numberOfUsers].privKey);
+			  this->users[this->numberOfUsers].priv = DES;
+			  Serial.print("privKey is: ");
+			  for (x = 0; x<16; x++)
+			  {
+				  Serial.print(this->users[this->numberOfUsers].privKey[x], HEX);
+				  Serial.print(" ");
+			  }
+			  Serial.println();
+		  }
         }
       }
       else
@@ -378,8 +346,7 @@ void snmpAgent::fillOIDList()
   this->addObject(usmStatsDecryptionErrors, 10, COUNTER, &this->decryptionErrors);
   this->addObject(usmStatsUnsupportedSecLevels, 10, COUNTER, &this->unsupportedSecLevels);
   
-  this->addObject(sysUpTime, 8, TICK, &this->localUpTime);
-  
+  this->addObject(sysUpTime, 8, TICK, &this->localUpTime);  
 }
 
 int snmpAgent::findUser(unsigned char* userName, int len)
@@ -462,6 +429,222 @@ int snmpAgent::setEngineID(unsigned char* newEngineID, int newEngineIDLength)
   this->numberOfUsers = 0; // resets the user count as the old users will not work anymore. keys are changed!
 }
 
+int snmpAgent::v3engineIdMatches() // returns 1 if engine ID matches
+{
+	dataBlock *hede;
+	int result = 0;
+	if (this->ver == 3)
+	{
+		hede = this->message.msgAuthEngineID;
+		result = (hede->_length == this->engineIDLength && compareStrings(hede->_content, this->engineID, this->engineIDLength));
+	}
+
+	return result;
+}
+
+int snmpAgent::v3userExists() // returns 1 if user is found
+{
+	int x;
+	int result = 0;
+	dataBlock *hede;
+	if (this->ver == 3)
+	{
+		hede = this->message.msgUserName;
+
+		x = this->findUser(hede->_content, hede->_length);
+
+		Serial.println(x);
+		Serial.print(strlen(users[x].userName));
+		Serial.print(" ");
+		Serial.println(hede->_length);
+		result = ((x >= 0) && strlen(users[x].userName) == hede->_length);
+	}
+
+	return result;
+}
+
+snmpUser* snmpAgent::v3getUser() // returns pointer to the user object. should be called only when user exists
+{
+	int x;
+	dataBlock *hede;
+	if (this->ver == 3)
+	{
+		hede = this->message.msgUserName;
+
+		x = this->findUser(hede->_content, hede->_length);
+		return &users[x];
+	}
+	else
+	{
+		return 0;
+	}
+}
+
+int snmpAgent::v3securityOK(snmpUser *user) // returns 1 if user's and message's security parameters correspond
+{
+	int result = 0;
+	if (this->ver == 3)
+	{
+		// In human language: return false if message has auth flag but user has no auth, or message has priv flag but user has no priv
+		result = (!((((this->message.msgFlags)->_content[0] & 0b00000001) && user->auth == 0) || (((this->message.msgFlags)->_content[0] & 0b00000010) && user->priv == 0)));
+		Serial.print("Reporting from v3securityOK ");
+		Serial.println(result);
+	}
+	return result;
+}
+
+int snmpAgent::v3authValid(snmpUser *user) // returns 1 if authentication is enabled and is valid.
+{
+	unsigned char authDummy[30], dummy[12], outbuffer[1000];
+	dataBlock *hede;
+	int x;
+	int result = 0;
+
+	if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000001)) // Check for message integrity (a.k.a. Authentication)
+	{
+		Serial.println("Auth Enabled");
+
+		for (x = 0; x<12; x++) // Storing incoming authParam into first 12 locations of dummy
+		{
+			dummy[x] = (this->message.msgAuthParam)->_content[x];
+		}
+
+		hede = this->message.msgAuthParam;
+		hede->_content = this->authDigest;
+		hede->_length = 12;
+
+		this->authDigest[0] = 0x00; // loops? no.
+		this->authDigest[1] = 0x00;
+		this->authDigest[2] = 0x00;
+		this->authDigest[3] = 0x00;
+		this->authDigest[4] = 0x00;
+		this->authDigest[5] = 0x00;
+		this->authDigest[6] = 0x00;
+		this->authDigest[7] = 0x00;
+		this->authDigest[8] = 0x00;
+		this->authDigest[9] = 0x00;
+		this->authDigest[10] = 0x00;
+		this->authDigest[11] = 0x00;
+
+		x = this->message.msgBody.createOutput(outbuffer); // x holds the length of the message
+
+		if (user->auth == SHA)
+		{
+			lrad_hmac_sha1((unsigned char*)outbuffer, x, (unsigned char*)user->authKey, 20, authDummy);
+		}
+		else if (user->auth == MD5)
+		{
+			hmac_md5((unsigned char*)outbuffer, x, (unsigned char*)user->authKey, 16, authDummy); // Auth dummy exists because MD5 functions somehow corrupt the engineID
+		}
+
+	} // Check if we have authentication
+	result = ((!((this->message.msgFlags)->_content[0] & 0b00000001)) || ((authDummy[0] == dummy[0]) && (authDummy[1] == dummy[1]) && (authDummy[2] == dummy[2]) && (authDummy[3] == dummy[3]) && (authDummy[4] == dummy[4]) && (authDummy[5] == dummy[5]) && (authDummy[6] == dummy[6]) && (authDummy[7] == dummy[7]) && (authDummy[8] == dummy[8]) && (authDummy[9] == dummy[9]) && (authDummy[10] == dummy[10]) && (authDummy[11] == dummy[11]))); // regular people use loops for this. but I am "special"
+	return result;
+}
+
+void snmpAgent::v3decrypt(snmpUser *user)
+{
+	int x;
+	unsigned char IV[8];
+
+	if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000010)) // That is, the message is encrypted
+	{
+		Serial.println("Doin' decryption...");
+		for (x = 0; x<8; x++) // Calculating IV using salt and pre-IV
+		{
+			IV[x] = (this->message.msgPrivParam)->_content[x] ^ user->privKey[8 + x];
+		}
+
+		des_cbc((this->message.msgData)->_content, (this->message.msgData)->_length, (this->message.msgData)->_content + (this->message.msgData)->_length, IV, (unsigned char*)user->privKey, 0);
+
+		/*for (x=0; x<200; x++)
+		{
+		if (x== (this->message.msgData)->_length)
+		Serial.println();
+		Serial.print(((this->message.msgData)->_content[x]), HEX);
+		Serial.print(" ");
+		}
+		Serial.println();*/
+
+		(this->message.msgData)->parseSelf((this->message.msgData)->_content + (this->message.msgData)->_length);
+
+		(this->message.msgData)->printContent();
+
+		this->message.parseFurther();
+	}
+}
+
+void snmpAgent::v3fillTime()
+{
+	dataBlock *hede;
+	hede = this->message.msgAuthEnTime;
+	hede->_content = this->timebuffer;
+	this->timebuffer[0] = this->localUpTime / 16777216; // README: I don't know how optimization is done here. But we can use >>24 as well.
+	this->timebuffer[1] = (this->localUpTime / 65536) % 256; // similarly, >>16
+	this->timebuffer[2] = (this->localUpTime / 256) % 256; // >>8
+	this->timebuffer[3] = this->localUpTime % 256;
+	hede->_length = 4;
+}
+
+void snmpAgent::gracefulNoOID()
+{
+	dataBlock *hede;
+
+	hede = this->message.variableBindings;
+	hede = &(hede->children[0]);
+
+	if (this->ver == 3)
+	{
+		Serial.println("The requested thing is not found among our OIDs");
+		hede->printSelf();
+		hede->_content[hede->_length - 2] = 0x80; // FIXME: This doesn't work for v2!
+	}
+	else if (this->ver == 2)
+	{
+		hede = this->message.errorStatus;
+		hede->_content[0] = (unsigned char)6;
+		// FIXME: Using errorindex we can generate more meaningful errors
+	}
+}
+
+void snmpAgent::v3fillError(int errorIdx) // Fills the required fields for an error message. errorIdx is the index number of the object in the objects array.
+{
+	dataBlock *hede;
+	int x;
+
+	hede = this->message.msgAuthEngineID; // auth engine id part
+	hede->_content = this->engineID;
+	hede->_length = this->engineIDLength;
+
+	hede = this->message.ctxEngineID; // context engine id part
+	hede->_content = this->engineID;
+	hede->_length = this->engineIDLength;
+
+	hede = this->message.msgFlags;
+	hede->_content[0] = 0;
+
+	hede = this->message.msgData;
+	hede->childrenCount = 3;
+	hede->_type = SEQ;
+
+	hede = this->message.errorIndex;
+	hede->_content[0] = 0;
+
+	hede = this->message.errorStatus;
+	hede->_content[0] = 0;
+
+	hede = this->message.data;
+	hede->_type = REPORT;
+
+	hede = &(this->message.variableBindings->children[0]);
+	hede->_type = SEQ;
+	hede->_content = this->jokerbuffer;
+	x = this->objects[errorIdx].returnObject(this->jokerbuffer);
+	hede->_length = x;
+	hede = this->message.variableBindings;
+	hede->childrenCount = 1;
+}
+
 void snmpAgent::listen()
 {
   snmpUser *user;
@@ -470,6 +653,7 @@ void snmpAgent::listen()
   int x, y;
   unsigned char outbuffer[1000];
   unsigned char inbuffer[1000];
+  unsigned char timebuffer[4];
   unsigned char oid[] = {0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x04, 0x00};
   //unsigned char kedi[] = {0x2b, 0x06, 0x01, 0x04, 0x01, 0x81, 0xb9, 0x26, 0x03};
   unsigned char hebe[] = {0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x03, 0x00};
@@ -494,144 +678,29 @@ void snmpAgent::listen()
   Serial.println("Started");
   this->message.parseSNMP(inbuffer);
   
-
-
-  if (this->ver == 3)
-  {
-    hede = this->message.msgAuthEngineID;
-  }
-  
-  if (this->ver == 2 || (hede->_length == this->engineIDLength && compareStrings(hede->_content, this->engineID, this->engineIDLength))) // Check for SNMP authEngineID match
-  {
-    
+  if (this->ver == 2 || this->v3engineIdMatches()) // Check for SNMP authEngineID match
+  {    
     Serial.println("yayy :) engine ID matches");
 
-    if (this->ver == 3)
+    if (this->ver == 2 || this->v3userExists()) // Check for SNMP user name Match
     {
-      hede = this->message.msgUserName;
+	  Serial.println("yayyyyy :D user name also matches");
+      user = v3getUser();
 
-      x = this->findUser(hede->_content, hede->_length);
-
-      Serial.println(x);
-      Serial.print(strlen(users[x].userName));
-      Serial.print(" ");
-      Serial.println(hede->_length);
-    }
-
-
-    
-    if (this->ver == 2 || ((x >= 0) && strlen(users[x].userName) == hede->_length)) // Check for SNMP user name Match
-    {
-      user = &users[x];
-      Serial.println("yayyyyy :D user name also matches");
-      // Prepare a good message :) this guy knows us
-
-      if (this->ver == 2 || (!((((this->message.msgFlags)->_content[0] & 0b00000001) && user->auth == 0) || (((this->message.msgFlags)->_content[0] & 0b00000010) && user->priv == 0))))
+      if (this->ver == 2 || this->v3securityOK(user))
       {
         Serial.println("Security level seems OK");
-
-        // check for flag and start auth steps according to that
-        if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000001)) // Check for message integrity (a.k.a. Authentication)
-        {
-          Serial.println("Auth Enabled");
-
-          for (x=0; x<12; x++) // Storing incoming authParam into first 12 locations of dummy
-          {
-            dummy[x] = (this->message.msgAuthParam)->_content[x];
-          }
-
-          hede = this->message.msgAuthParam;
-          hede->_content = this->authDigest;
-          hede->_length = 12;
-
-          this->authDigest[0] = 0x00;
-          this->authDigest[1] = 0x00;
-          this->authDigest[2] = 0x00;
-          this->authDigest[3] = 0x00;
-          this->authDigest[4] = 0x00;
-          this->authDigest[5] = 0x00;
-          this->authDigest[6] = 0x00;
-          this->authDigest[7] = 0x00;
-          this->authDigest[8] = 0x00;
-          this->authDigest[9] = 0x00;
-          this->authDigest[10] = 0x00;
-          this->authDigest[11] = 0x00;
-
-          x = this->message.msgBody.createOutput(outbuffer); // x holds the length of the message
-
-          if (user->auth == SHA)
-          {
-            lrad_hmac_sha1((unsigned char*) outbuffer, x, (unsigned char*) user->authKey, 20, this->authDigest);
-          }
-          else if (user->auth == MD5)
-          {
-            hmac_md5((unsigned char*) outbuffer, x, (unsigned char*) user->authKey, 16, authDummy); // Auth dummy exists because MD5 functions somehow corrupt the engineID
-            for (x=0; x<12; x++)
-            {
-              this->authDigest[x] = authDummy[x];
-            }
-          }
-        } // Check if we have authentication
-
-
       
-        if (this->ver == 2 || ((!((this->message.msgFlags)->_content[0] & 0b00000001)) || ((this->authDigest[0] == dummy[0]) && (this->authDigest[1] == dummy[1]) && (this->authDigest[2] == dummy[2]) && (this->authDigest[3] == dummy[3]) && (this->authDigest[4] == dummy[4]) && (this->authDigest[5] == dummy[5]) && (this->authDigest[6] == dummy[6]) && (this->authDigest[7] == dummy[7]) && (this->authDigest[8] == dummy[8]) && (this->authDigest[9] == dummy[9]) && (this->authDigest[10] == dummy[10]) && (this->authDigest[11] == dummy[11]))))
+		if (this->ver == 2 || this->v3authValid(user))
         {
-
           Serial.println("Message is properly authenticated");
-
-          // TODO: Now do something here!
-          // check for the integrity of the incoming message
-          // it should be done before privacy, otherwise we can fail while decryption
 
           if (this->ver == 2 || (!((this->message.msgFlags)->_content[0] & 0b00000010) || (((this->message.msgFlags)->_content[0] & 0b00000010) && ((this->message.msgData)->_length)%8 == 0))) // This is for DES. AES is not implemented.
           {
-
-            if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000010)) // That is, the message is encrypted
-            {
-              Serial.println("Doin' decryption...");
-              for (x=0; x<8; x++) // Calculating IV using salt and pre-IV
-              {
-                IV[x] = (this->message.msgPrivParam)->_content[x] ^ user->privKey[8+x];
-              }
-        
-              des_cbc((this->message.msgData)->_content, (this->message.msgData)->_length, (this->message.msgData)->_content + (this->message.msgData)->_length, IV, (unsigned char*) user->privKey, 0);
-        
-        /*for (x=0; x<200; x++)
-        {
-          if (x== (this->message.msgData)->_length)
-            Serial.println();
-          Serial.print(((this->message.msgData)->_content[x]), HEX);
-          Serial.print(" ");
-        }
-        Serial.println();*/
-
-              (this->message.msgData)->parseSelf((this->message.msgData)->_content + (this->message.msgData)->_length);
-
-              (this->message.msgData)->printContent();
-        
-              this->message.parseFurther();
-            }
+			this->v3decrypt(user);
 
             if (this->ver == 3 && (user->auth == SHA || user->auth == MD5)) // FIXME: Use flags instead of users
             {
-              hede = this->message.msgAuthParam;
-              hede->_content = this->authDigest;
-              hede->_length = 12;
-
-              this->authDigest[0] = 0x00;
-              this->authDigest[1] = 0x00;
-              this->authDigest[2] = 0x00;
-              this->authDigest[3] = 0x00;
-              this->authDigest[4] = 0x00;
-              this->authDigest[5] = 0x00;
-              this->authDigest[6] = 0x00;
-              this->authDigest[7] = 0x00;
-              this->authDigest[8] = 0x00;
-              this->authDigest[9] = 0x00;
-              this->authDigest[10] = 0x00;
-              this->authDigest[11] = 0x00;
-
               hede = this->message.msgFlags; // Set message flags to no report
               hede->_content[0] &= 0b00000011; // 0: no auth no priv; 1: auth no priv; 3: auth priv; 2: shouldn't be used
             }
@@ -641,14 +710,18 @@ void snmpAgent::listen()
               hede->_content[0] = 0;
             }
 
+			this->v3fillTime();
+
             // TODO: Put a for loop here to span all OIDs requested. Now responses to only one.
             
             hede = this->message.variableBindings;
             hede = &(hede->children[0]);
             x = findOID(&(hede->_content[2]),hede->_content[1]); // TODO: Do something for graceful "no OID message"
 
-            if (x>=0 &&(this->ver == 2 || user->permissions[x] != 0))
-            {
+			Serial.println("looking for OID...");
+
+            if (x>=0 &&(this->ver == 2 || user->permissions[x] != 0)) // Permissions block. FIXME: Make it simpler!
+            { 
               hede->printSelf();
               Serial.print("Found OID:");
               Serial.println(x);
@@ -736,30 +809,21 @@ void snmpAgent::listen()
             }
             else // This is the graceful noOID message
             {
-              if (this->ver == 3)
-              {
-                Serial.println("The requested thing is not found among our OIDs");
-                hede->printSelf();
-                hede->_content[hede->_length-2] = 0x80; // FIXME: This doesn't work for v2!
-              }
-              else if (this->ver == 2)
-              {
-                hede = this->message.errorStatus;
-                hede->_content[0] = (unsigned char) 6;
-                // FIXME: Using errorindex we can generate more meaningful errors
-              }
+				this->gracefulNoOID();
             }
 
             hede = this->message.data;
             hede->_type = GETRES; // Outgoing message type is GET response
 
-//#ifndef SNMP_V2C
             if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000010)) // That is, the message needs to be encrypted
             {
+				for (x = 0; x<8; x++) // Calculating IV using salt and pre-IV
+				{
+					IV[x] = (this->message.msgPrivParam)->_content[x] ^ user->privKey[8 + x];
+				}
               Serial.println("Doin' encryption...");
 
               hede = this->message.msgData;
-              //hede->_content;
 
               x = (this->message.msgData)->createOutput(outbuffer); // x holds the length of the message
               (this->message.msgData)->_type = OCTSTR;
@@ -768,7 +832,6 @@ void snmpAgent::listen()
 
               Serial.println("Encrypted Content:");
               (this->message.msgData)->printContent();
-//#ifndef SNMP_V2C
             }
 
             x = this->message.msgBody.createOutput(outbuffer); // x holds the length of the message
@@ -790,203 +853,52 @@ void snmpAgent::listen()
           }
           else // this is the case when we have a decryption error
           {
+			  // TODO: Check report flag here. If no report, do not report.
             Serial.println("There's something wrong regarding to decryption >:'(");
-            hede->_content = this->engineID;
-            hede->_length = this->engineIDLength;
-            // TODO: Check report flag here. If no report, do not report.
-  
-            hede = this->message.ctxEngineID;
-            hede->_content = this->engineID;
-            hede->_length = this->engineIDLength;
 
-            hede = this->message.msgUserName;
-            hede->_length = 0;
-
-            Serial.println("Reporting...");
-      
+			this->v3fillTime();
             this->decryptionErrors ++; // Increase the unknown engine id counter by one
-
-            hede = this->message.msgData;
-            hede->childrenCount = 3;
-            hede->_type = SEQ;
-
-            hede = this->message.errorIndex;
-            hede->_content[0] = 0;
-
-            hede = this->message.errorStatus;
-            hede->_content[0] = 0;
-
-            hede = &(this->message.variableBindings->children[0]);
-            hede->_type = SEQ;
-            hede->_content = dummy;
-            x = objects[3].returnObject(dummy);
-            hede->_length = x;
-            hede = this->message.variableBindings;
-            hede->childrenCount = 1;
-
-            hede = this->message.msgFlags;
-            hede->_content[0] = 0;
-      
-            hede = this->message.data;
-            hede->_type = REPORT;  
+			this->v3fillError(3);
           }
         } // Check for authentication validity
         else // Package integrity can not be validated: wrongDigest
         {
+			// TODO: Check report flag here. If no report, do not report.
           Serial.println("Wrong digest  :(");
-          hede->_content = this->engineID;
-          hede->_length = this->engineIDLength;
-          // TODO: Check report flag here. If no report, do not report.
 
-          hede = this->message.ctxEngineID;
-          hede->_content = this->engineID;
-          hede->_length = this->engineIDLength;
-
-          hede = this->message.msgUserName;
-          hede->_length = 0;
-
-          Serial.println("Reporting...");
-      
+		  this->v3fillTime();
           this->wrongDigests ++; // Increase the unknown engine id counter by one
-  
-          hede = this->message.msgData;
-          hede->childrenCount = 3;
-          hede->_type = SEQ;
-
-          hede = this->message.errorIndex;
-          hede->_content[0] = 0;
-
-          hede = this->message.errorStatus;
-          hede->_content[0] = 0;
-
-          hede = &(this->message.variableBindings->children[0]);
-          hede->_type = SEQ;
-          hede->_content = dummy;
-          x = objects[2].returnObject(dummy);
-          hede->_length = x;
-          hede = this->message.variableBindings;
-          hede->childrenCount = 1;
-
-          hede = this->message.msgFlags;
-          hede->_content[0] = 0;
-        
-          hede = this->message.data;
-          hede->_type = REPORT;
+		  this->v3fillError(2);
         }
       }
       else
       {
+		  // TODO: Check report flag here. If no report, do not report.
         Serial.println("Problem regarding security levels :(");
-        hede->_content = this->engineID;
-        hede->_length = this->engineIDLength;
-        // TODO: Check report flag here. If no report, do not report.
-
-        hede = this->message.ctxEngineID;
-        hede->_content = this->engineID;
-        hede->_length = this->engineIDLength;
-
-        hede = this->message.msgUserName;
-        hede->_length = 0;
-
-        Serial.println("Reporting...");
-      
+        
+		this->v3fillTime();
         this->unsupportedSecLevels ++; // Increase the unknown engine id counter by one
-
-        hede = this->message.msgData;
-        hede->childrenCount = 3;
-        hede->_type = SEQ;
-
-        hede = this->message.errorIndex;
-        hede->_content[0] = 0;
-
-        hede = this->message.errorStatus;
-        hede->_content[0] = 0;
-
-        hede = &(this->message.variableBindings->children[0]);
-        hede->_type = SEQ;
-        hede->_content = dummy;
-        x = objects[4].returnObject(dummy);
-        hede->_length = x;
-        hede = this->message.variableBindings;
-        hede->childrenCount = 1;
-
-        hede = this->message.msgFlags;
-        hede->_content[0] = 0;
-      
-        hede = this->message.data;
-        hede->_type = REPORT;
+		this->v3fillError(4);
       }
     }
     else
     {
+	  // TODO: Check report flag here. If no report, do not report.
       Serial.println("No such user :'(");
-      hede->_content = this->engineID;
-      hede->_length = this->engineIDLength;
-      // TODO: Check report flag here. If no report, do not report.
 
-      hede = this->message.ctxEngineID;
-      hede->_content = this->engineID;
-      hede->_length = this->engineIDLength;
-
-      hede = this->message.msgUserName;
-      hede->_length = 0;
-
-      Serial.println("Reporting...");
-      
+	  this->v3fillTime();      
       this->unknownUserNames ++; // Increase the unknown engine id counter by one
-
-      hede = this->message.msgData;
-      hede->childrenCount = 3;
-      hede->_type = SEQ;
-
-      hede = this->message.errorIndex;
-      hede->_content[0] = 0;
-
-      hede = this->message.errorStatus;
-      hede->_content[0] = 0;
-
-      hede = &(this->message.variableBindings->children[0]);
-      hede->_type = SEQ;
-      hede->_content = dummy;
-      x = objects[1].returnObject(dummy);
-      hede->_length = x;
-      hede = this->message.variableBindings;
-      hede->childrenCount = 1;
-
-      hede = this->message.msgFlags;
-      hede->_content[0] = 0;
-      
-      hede = this->message.data;
-      hede->_type = REPORT;
+	  this->v3fillError(1);
     }
   }
   else
   {
+	  // TODO: Check report flag here. If no report, do not report.
       Serial.println(">:(");
-      // Prepare a bad message >:( this guy doesn't know us
-      hede->_content = engineID;
-      hede->_length = this->engineIDLength;
-      // TODO: Check report flag here. If no report, do not report.
 
-      hede = this->message.ctxEngineID;
-      hede->_content = this->engineID;
-      hede->_length = this->engineIDLength;
-      
+	  this->v3fillTime();
       this->unknownEngineIDs ++; // Increase the unknown engine id counter by one
-
-      hede = &(this->message.variableBindings->children[0]);
-      hede->_type = SEQ;
-      hede->_content = dummy;
-      x = objects[0].returnObject(dummy);
-      hede->_length = x;
-      hede = this->message.variableBindings;
-      hede->childrenCount = 1;
-
-      hede = this->message.msgFlags;
-      hede->_content[0] = 0;
-      
-      hede = this->message.data;
-      hede->_type = REPORT;
+	  this->v3fillError(0);
     }
 
     this->message.msgBody.createOutput(outbuffer);
@@ -1005,23 +917,23 @@ void snmpAgent::sendTrapv3(char* receiverIP, unsigned char* oid, int len, const 
   else
   {
     unsigned char trapTemplate[] = {
-      0x30, 0x81, 0x84, 0x02, 0x01, 0x03, 0x30, 0x11,
-      0x02, 0x04, 0x09, 0xd7, 0x25, 0x09, 0x02, 0x03, 
-      0x00, 0xff, 0xe3, 0x04, 0x01, 0x00, 0x02, 0x01, 
-      0x03, 0x04, 0x21, 0x30, 0x1f, 0x04, 0x0d, 0x80, 
-      0x00, 0x1f, 0x88, 0x80, 0xff, 0x61, 0x81, 0x68, 
-      0x72, 0xa0, 0xe1, 0x56, 0x02, 0x01, 0x18, 0x02, 
-      0x01, 0x00, 0x04, 0x04, 0x6b, 0x65, 0x64, 0x69, 
-      0x04, 0x00, 0x04, 0x00, 0x30, 0x49, 0x04, 0x0d, 
-      0x80, 0x00, 0x1f, 0x88, 0x80, 0xff, 0x61, 0x81, 
-      0x68, 0x72, 0xa0, 0xe1, 0x56, 0x04, 0x00, 0xa7, 
-      0x36, 0x02, 0x04, 0x37, 0x84, 0x75, 0x9d, 0x02, 
-      0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x28, 0x30, 
-      0x0f, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 
-      0x01, 0x03, 0x00, 0x43, 0x03, 0x10, 0x1a, 0x23, 
-      0x30, 0x15, 0x06, 0x0a, 0x2b, 0x06, 0x01, 0x06, 
-      0x03, 0x01, 0x01, 0x04, 0x01, 0x00, 0x06, 0x07, 
-      0x2b, 0x06, 0x01, 0x02, 0x01, 0x01
+		0x30, 0x81, 0x84, 0x02, 0x01, 0x03, 0x30, 0x11,
+		0x02, 0x04, 0x09, 0xd7, 0x25, 0x09, 0x02, 0x03, 
+		0x00, 0xff, 0xe3, 0x04, 0x01, 0x00, 0x02, 0x01, 
+		0x03, 0x04, 0x21, 0x30, 0x1f, 0x04, 0x0d, 0x80, 
+		0x00, 0x1f, 0x88, 0x80, 0xff, 0x61, 0x81, 0x68, 
+		0x72, 0xa0, 0xe1, 0x56, 0x02, 0x01, 0x18, 0x02, 
+		0x01, 0x00, 0x04, 0x04, 0x6b, 0x65, 0x64, 0x69, 
+		0x04, 0x00, 0x04, 0x00, 0x30, 0x49, 0x04, 0x0d, 
+		0x80, 0x00, 0x1f, 0x88, 0x80, 0xff, 0x61, 0x81, 
+		0x68, 0x72, 0xa0, 0xe1, 0x56, 0x04, 0x00, 0xa7, 
+		0x36, 0x02, 0x04, 0x37, 0x84, 0x75, 0x9d, 0x02, 
+		0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x28, 0x30, 
+		0x0f, 0x06, 0x08, 0x2b, 0x06, 0x01, 0x02, 0x01, 
+		0x01, 0x03, 0x00, 0x43, 0x03, 0x10, 0x1a, 0x23, 
+		0x30, 0x15, 0x06, 0x0a, 0x2b, 0x06, 0x01, 0x06, 
+		0x03, 0x01, 0x01, 0x04, 0x01, 0x00, 0x06, 0x07, 
+		0x2b, 0x06, 0x01, 0x02, 0x01, 0x01
     }; // This is pure laziness. Using an example trap, we just fill in the necessary details in it and send as a new trap.
     dataBlock *dummy;
     snmpUser *user;
@@ -1080,7 +992,7 @@ void snmpAgent::sendTrapv3(char* receiverIP, unsigned char* oid, int len, const 
     children[1]._content = (unsigned char*) objects[oidNo].oid;
     children[1]._length = objects[oidNo].oidLen;
     
-    x = this->message.msgBody.createOutput(outbuffer) + 1;
+    x = this->message.msgBody.createOutput(outbuffer);
   
     Udp.beginPacket(receiverIP, 162); // Trap address is here!!
     Udp.write(outbuffer,x);
@@ -1154,7 +1066,7 @@ void snmpAgent::sendTrapv2c(char* receiverIP, unsigned char* oid, int len, const
     children[1]._content = (unsigned char*) objects[oidNo].oid;
     children[1]._length = objects[oidNo].oidLen;
     
-    x = this->message.msgBody.createOutput(outbuffer) + 1;
+    x = this->message.msgBody.createOutput(outbuffer);
   
     Udp.beginPacket(receiverIP, 162); // Trap address is here!!
     Udp.write(outbuffer,x);

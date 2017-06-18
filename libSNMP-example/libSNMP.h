@@ -98,6 +98,29 @@ class snmpAgent
     void init(); // Well, just UDP functions
     int setEngineID(unsigned char* newEngineID, int newEngineIDLength);
 
+	int v3engineIdMatches();
+
+	int v3userExists();
+
+	snmpUser * v3getUser();
+
+	int v3securityOK(snmpUser * user);
+
+	int v3authValid(snmpUser * user);
+
+	void v3decrypt(snmpUser * user);
+
+	void v3fillTime();
+
+	void gracefulNoOID();
+
+	void v3fillError(int errorIdx);
+
+
+
+	unsigned char timebuffer[4]; // used to hold time 
+	unsigned char jokerbuffer[100]; // used to hold parts of error messages and that sort of random stuff
+
     snmpMessage message;
     snmpObject objects[MAX_OBJECTS];
     int numberOfObjects;
