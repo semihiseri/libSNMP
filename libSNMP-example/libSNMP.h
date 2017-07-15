@@ -1,3 +1,19 @@
+/* This file is part of libSNMP.
+*
+* libSNMP is free software : you can redistribute it and / or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* libSNMP is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with Foobar.If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #ifndef LIBSNMP_H
 #define LIBSNMP_H
 
@@ -86,7 +102,9 @@ class snmpAgent
     int findOID(unsigned char* oid, int len); // Internal function
     int findUser(unsigned char* userName, int len); // Internal function
     void update(); // call this regularly :) This will handle everything
-    void updateUpTime(); // Updates upTime
+    void updateUpTime();
+	int getNext(int a, snmpUser * user);
+	// Updates upTime
     void listen(); // Checks whether we have any incoming stuff
     void check(); // Checks whether we need to send a trap
     void sendTrapv2c(char* receiverIP, unsigned char* oid, int len, const char* community);
@@ -114,9 +132,26 @@ class snmpAgent
 
 	void gracefulNoOID();
 
+	void lastOID();
+
+	void fillOidToVarBind(int oidPos, int varBindPos);
+
 	void v3fillError(int errorIdx);
 
+	bool v3desOK();
 
+	bool v3permissionsOK(snmpUser * user);
+
+	bool v2communityOK();
+
+	contentType requestType();
+
+	bool oidAvailable(int x, snmpUser *user);
+	int getOidPos(int x);
+
+	int getNextSearchRight(unsigned char * source, int sourceLen);
+
+	int getNext(int x);
 
 	unsigned char timebuffer[4]; // used to hold time 
 	unsigned char jokerbuffer[100]; // used to hold parts of error messages and that sort of random stuff

@@ -1,3 +1,20 @@
+/* This file is part of libSNMP.
+ *
+ * libSNMP is free software : you can redistribute it and / or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ * 
+ * libSNMP is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Foobar.If not, see <http://www.gnu.org/licenses/>.
+ */
+
+
 static unsigned char illuminationOID[]     = {0x2b, 0x06, 0x01, 0x04, 0x01, 0x81, 0xb9, 0x26, 0x03, 0x01}; // illumination
 static unsigned char humidityOID[]         = {0x2b, 0x06, 0x01, 0x04, 0x01, 0x81, 0xb9, 0x26, 0x03, 0x02}; // humidity
 static unsigned char temperatureOID[]      = {0x2b, 0x06, 0x01, 0x04, 0x01, 0x81, 0xb9, 0x26, 0x03, 0x03}; // temperature
@@ -24,6 +41,13 @@ byte mac[] = {0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED};
 float humid = 12.35;
 
 snmpAgent kedi;
+
+static unsigned char usmStatsUnsupportedSecLevels[] = { 0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x01, 0x00 }; // These are here for demo. They don't have any other functions here
+static unsigned char usmStatsNotInTimeWindows[] = { 0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x02, 0x00 };
+static unsigned char usmStatsUnknownUserNames[] = { 0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x03, 0x00 };
+static unsigned char usmStatsUnknownEngineIDs[] = { 0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x04, 0x00 };
+static unsigned char usmStatsWrongDigests[] = { 0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x05, 0x00 };
+static unsigned char usmStatsDecryptionErrors[] = { 0x2b, 0x06, 0x01, 0x06, 0x03, 0x0f, 0x01, 0x01, 0x06, 0x00 };
 
 void setup() {
   Serial.begin(9600);
@@ -82,7 +106,22 @@ void setup() {
    */
   
   kedi.addPermission(sysUpTime, 8, (unsigned char*) "hede", 4, 3);
+  kedi.addPermission(sysUpTime, 8, (unsigned char*) "hede", 4, 3);
+  kedi.addPermission(usmStatsUnsupportedSecLevels, 10, (unsigned char*) "hede", 4, 3); // These better be hidden. I included them for demoing
+  kedi.addPermission(usmStatsNotInTimeWindows, 10, (unsigned char*) "hede", 4, 3);
+  kedi.addPermission(usmStatsUnknownUserNames, 10, (unsigned char*) "hede", 4, 3);
+  kedi.addPermission(usmStatsUnknownEngineIDs, 10, (unsigned char*) "hede", 4, 3);
+  kedi.addPermission(usmStatsWrongDigests, 10, (unsigned char*) "hede", 4, 3);
+  kedi.addPermission(usmStatsDecryptionErrors, 10, (unsigned char*) "hede", 4, 3);
+
   kedi.addPermission(sysUpTime, 8, (unsigned char*) "kedi", 4, 1);
+  kedi.addPermission(usmStatsUnsupportedSecLevels, 10, (unsigned char*) "kedi", 4, 1); // These better be hidden. I included them for demoing
+  kedi.addPermission(usmStatsNotInTimeWindows, 10, (unsigned char*) "kedi", 4, 1);
+  kedi.addPermission(usmStatsUnknownUserNames, 10, (unsigned char*) "kedi", 4, 1);
+  //kedi.addPermission(usmStatsUnknownEngineIDs, 10, (unsigned char*) "kedi", 4, 1);
+  //kedi.addPermission(usmStatsWrongDigests, 10, (unsigned char*) "kedi", 4, 1);
+  kedi.addPermission(usmStatsDecryptionErrors, 10, (unsigned char*) "kedi", 4, 1);
+
 }
 
 

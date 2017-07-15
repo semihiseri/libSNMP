@@ -1,3 +1,19 @@
+/* This file is part of libSNMP.
+*
+* libSNMP is free software : you can redistribute it and / or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* libSNMP is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with Foobar.If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #include <Arduino.h>
 
 #include "libSNMP.h"
@@ -593,6 +609,9 @@ void snmpAgent::gracefulNoOID()
 	hede = this->message.variableBindings;
 	hede = &(hede->children[0]);
 
+	hede = this->message.data;
+	hede->_type = GETRES;
+
 	if (this->ver == 3)
 	{
 		Serial.println("The requested thing is not found among our OIDs");
@@ -605,6 +624,41 @@ void snmpAgent::gracefulNoOID()
 		hede->_content[0] = (unsigned char)6;
 		// FIXME: Using errorindex we can generate more meaningful errors
 	}
+}
+
+void snmpAgent::lastOID()
+{
+	dataBlock *hede;
+
+	hede = this->message.variableBindings;
+	hede = &(hede->children[0]);
+
+	hede = this->message.data;
+	hede->_type = GETRES;
+
+	if (this->ver == 3)
+	{
+		Serial.println("The requested thing is not found among our OIDs");
+		hede->printSelf();
+		hede->_content[hede->_length - 2] = 0x82; // FIXME: This doesn't work for v2!
+	}
+	else if (this->ver == 2)
+	{
+		hede = this->message.errorStatus;
+		hede->_content[0] = (unsigned char)6;
+		// FIXME: Using errorindex we can generate more meaningful errors
+	}
+}
+
+void snmpAgent::fillOidToVarBind(int oidPos, int varBindPos)
+{
+	dataBlock *hede;
+	int x;
+	hede = &(this->message.variableBindings->children[0]);
+	hede->_type = SEQ;
+	hede->_content = this->jokerbuffer;
+	x = this->objects[oidPos].returnObject(this->jokerbuffer);
+	hede->_length = x;
 }
 
 void snmpAgent::v3fillError(int errorIdx) // Fills the required fields for an error message. errorIdx is the index number of the object in the objects array.
@@ -636,13 +690,151 @@ void snmpAgent::v3fillError(int errorIdx) // Fills the required fields for an er
 	hede = this->message.data;
 	hede->_type = REPORT;
 
-	hede = &(this->message.variableBindings->children[0]);
-	hede->_type = SEQ;
-	hede->_content = this->jokerbuffer;
-	x = this->objects[errorIdx].returnObject(this->jokerbuffer);
-	hede->_length = x;
+	this->fillOidToVarBind(errorIdx, 0);
+
 	hede = this->message.variableBindings;
 	hede->childrenCount = 1;
+}
+
+bool snmpAgent::v3desOK()
+{
+	return (!((this->message.msgFlags)->_content[0] & 0b00000010) || (((this->message.msgFlags)->_content[0] & 0b00000010) && ((this->message.msgData)->_length) % 8 == 0));
+}
+
+bool snmpAgent::v2communityOK()
+{
+	dataBlock *hede;
+	bool ret = true;
+	int y;
+	if (this->ver == 2)
+	{
+		hede = this->message.msgCommunity;
+
+		if (!((hede->_length == strlen(this->communityString)) && compareStrings((unsigned char*) this->communityString, hede->_content, hede->_length)))
+		{
+			Serial.println("Community strings did not match! Dropping");
+			ret = false;
+		}
+
+		Serial.println(hede->_length);
+		Serial.println(strlen(this->communityString));
+		for (y = 0; y<20; y++)
+		{
+			Serial.print(hede->_content[y]);
+			Serial.print(" ");
+		}
+		Serial.println();
+	}
+	return ret;
+}
+
+contentType snmpAgent::requestType()
+{
+	dataBlock *hede;
+	hede = this->message.data;
+	return hede->_type;
+}
+
+bool snmpAgent::oidAvailable(int x, snmpUser *user)
+{
+	bool retVal = false;
+	if (this->ver == 2 && x >= 0)
+	{
+		retVal = true;
+	}
+	else if (this->ver == 3 && x >= 0 && user->permissions[x] != 0)
+	{
+		retVal = true;
+	}
+	return retVal;
+}
+
+int snmpAgent::getOidPos(int x)
+{
+	// FIXME: Should there be something to check the boundaries of variableBindings??
+	int pos;
+	dataBlock *hede;
+	hede = this->message.variableBindings;
+	hede = &(hede->children[x]);
+	pos = findOID(&(hede->_content[2]), hede->_content[1]); // TODO: Do something for graceful "no OID message"
+	return pos;
+}
+
+int snmpAgent::getNextSearchRight(unsigned char *source, int sourceLen)
+{
+	int x, y;
+}
+
+bool compareOid(unsigned char *a, int aLen, unsigned char* b, int bLen) // returns true if b comes later than a
+{
+	bool result = false;
+	int x;
+	int shortest;
+
+	if (aLen < bLen)
+	{
+		shortest = aLen;
+	}
+	else
+	{
+		shortest = bLen;
+	}
+
+	for (x = 0; x < shortest; x++)
+	{
+		if (b[x] > a[x])
+		{
+			return true;
+		}
+		else if (b[x] < a[x])
+		{
+			return false;
+		}
+	}
+
+	if (bLen > aLen)
+	{
+		return true;
+	}
+
+	return false;
+}
+
+int snmpAgent::getNext(int a, snmpUser *user) // get next item for oid located in variable binding #x -this is a weird brute force search algorithm.
+{
+	unsigned char *source;
+	int sourceLen;
+	int next = -1;
+
+	int x, y, shortest;
+	source = this->message.variableBindings->children[a]._content + 2;
+	sourceLen = this->message.variableBindings->children[a]._content[1];
+
+	for (x = 0; x < this->numberOfObjects; x++)
+	{
+		if (!this->oidAvailable(x, user))
+		{
+			continue;
+		}
+		if (compareOid(source, sourceLen, this->objects[x].oid, this->objects[x].oidLen))
+		{
+			if (next == -1)
+			{
+				next = x;
+			}
+			else
+			{
+				if (compareOid(this->objects[x].oid, this->objects[x].oidLen, this->objects[next].oid, this->objects[next].oidLen))
+				{
+					next = x;
+				}
+			}
+		}
+	}
+
+	return next;
+	//for (x = this->getOidPos(0) + 1; x < this->numberOfObjects && ; x++);
+
 }
 
 void snmpAgent::listen()
@@ -659,252 +851,233 @@ void snmpAgent::listen()
   unsigned char hebe[] = {0x2b, 0x06, 0x01, 0x02, 0x01, 0x01, 0x03, 0x00};
   unsigned char IV[8];
 
+  bool noErrors = true;
+  bool drop = false;
+
   unsigned char dummy[100], authDummy[30];
 
   delay(10);
 
-  if (Udp.parsePacket())
-      delay(5);
-  else
-      return;
+	for (x = 0; x<10; x++)
+	{
+		objects[0].oid[x] = oid[x];
+	}
 
-  Udp.read(inbuffer, 500);
+	if (Udp.parsePacket())
+		delay(5);
+	else
+		drop = true;
 
-  for (x=0;x<10;x++)
-  {
-    objects[0].oid[x] = oid[x];
-  }
-
-  Serial.println("Started");
-  this->message.parseSNMP(inbuffer);
+	if (!drop)
+	{
+		Serial.println("Started");
+		Udp.read(inbuffer, 500);
+		this->message.parseSNMP(inbuffer); // FIXME: check problematic parsing!
+	}
   
-  if (this->ver == 2 || this->v3engineIdMatches()) // Check for SNMP authEngineID match
-  {    
-    Serial.println("yayy :) engine ID matches");
+	if (!drop && noErrors && (this->ver == 2 || this->v3engineIdMatches()))  // Check for SNMP authEngineID match
+	{
+		Serial.println("yayy :) engine ID matches");
+	}
+	else if (!drop && noErrors)
+	{
+		// TODO: Check report flag here. If no report, do not report. (i.e. drop)
+		noErrors = false;
+		Serial.println(">:(");
 
-    if (this->ver == 2 || this->v3userExists()) // Check for SNMP user name Match
-    {
-	  Serial.println("yayyyyy :D user name also matches");
-      user = v3getUser();
-
-      if (this->ver == 2 || this->v3securityOK(user))
-      {
-        Serial.println("Security level seems OK");
-      
-		if (this->ver == 2 || this->v3authValid(user))
-        {
-          Serial.println("Message is properly authenticated");
-
-          if (this->ver == 2 || (!((this->message.msgFlags)->_content[0] & 0b00000010) || (((this->message.msgFlags)->_content[0] & 0b00000010) && ((this->message.msgData)->_length)%8 == 0))) // This is for DES. AES is not implemented.
-          {
-			this->v3decrypt(user);
-
-            if (this->ver == 3 && (user->auth == SHA || user->auth == MD5)) // FIXME: Use flags instead of users
-            {
-              hede = this->message.msgFlags; // Set message flags to no report
-              hede->_content[0] &= 0b00000011; // 0: no auth no priv; 1: auth no priv; 3: auth priv; 2: shouldn't be used
-            }
-            else if (this->ver == 3)
-            {
-              hede = this->message.msgFlags;
-              hede->_content[0] = 0;
-            }
-
-			this->v3fillTime();
-
-            // TODO: Put a for loop here to span all OIDs requested. Now responses to only one.
-            
-            hede = this->message.variableBindings;
-            hede = &(hede->children[0]);
-            x = findOID(&(hede->_content[2]),hede->_content[1]); // TODO: Do something for graceful "no OID message"
-
-			Serial.println("looking for OID...");
-
-            if (x>=0 &&(this->ver == 2 || user->permissions[x] != 0)) // Permissions block. FIXME: Make it simpler!
-            { 
-              hede->printSelf();
-              Serial.print("Found OID:");
-              Serial.println(x);
-
-              if (this->ver == 2)
-              {
-                hede = this->message.msgCommunity;
-
-                if (!((hede->_length == strlen(this->communityString)) && compareStrings((unsigned char*) this->communityString, hede->_content, hede->_length)))
-                {
-                  Serial.println("Community strings did not match! Dropping");
-                  return;
-                }
-                
-                Serial.println(hede->_length);
-                Serial.println(strlen(this->communityString));
-                for (y=0; y<20; y++)
-                {
-                  Serial.print(hede->_content[y]);
-                  Serial.print(" ");
-                }
-                Serial.println();
-              }
-
-              /*
-              hede = this->message.data;
-              if (hede->_type == SETREQ)
-              {
-                Serial.println("Hooraay! We have a set request here");
-                // Check for the community string
-                hede = this->message.variableBindings;
-                hede = &(hede->children[0]);
-
-                hede->children = dummyBinding;
-                hede->parseChildren();
-
-                hede = &(hede->children[1]);
-                
-                Serial.println(hede->_type, HEX);
-
-                if (hede->_type == OCTSTR)
-                {
-                  Serial.println("ehe =)");
-                  hede->printContent();
-                  Serial.println((this->objects[x]).type);
-                  if ((this->objects[x]).type == OCTSTRING)
-                  {
-                    for (y=0; y<hede->_length; y++)
-                    {
-                      ((unsigned char*) objects[x].content)[y] = (unsigned char) hede->_content[y];
-                    }
-                  }
-                  else
-                  {
-                    hede = this->message.errorStatus;
-                    hede->_content[0] = (unsigned char) 7;
-                  }
-                }
-                else
-                {
-                  hede = this->message.errorStatus;
-                  hede->_content[0] = (unsigned char) 17;
-                }
-              }
-
-              */
-
-              hede = this->message.variableBindings;
-              hede = &(hede->children[0]);
-
-              if (this->ver == 2 || ((user->permissions[x] == 1) || ((user->permissions[x] == 2) && ((this->message.msgFlags)->_content[0] & 0b00000001)) || ((user->permissions[x] == 3) && ((this->message.msgFlags)->_content[0] & 0b00000010))))
-              {
-                x = objects[x].returnObject(dummy); // x holds the length of the object
-                hede->_length = x;
-                hede->_content = dummy;
-                hede->printSelf();
-              }
-
-              else if (this->ver == 3)
-              {
-                hede = this->message.errorStatus;
-                hede->_content[0] = (unsigned char) 16; // Authorization Error
-              }
-
-            }
-            else // This is the graceful noOID message
-            {
-				this->gracefulNoOID();
-            }
-
-            hede = this->message.data;
-            hede->_type = GETRES; // Outgoing message type is GET response
-
-            if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000010)) // That is, the message needs to be encrypted
-            {
-				for (x = 0; x<8; x++) // Calculating IV using salt and pre-IV
-				{
-					IV[x] = (this->message.msgPrivParam)->_content[x] ^ user->privKey[8 + x];
-				}
-              Serial.println("Doin' encryption...");
-
-              hede = this->message.msgData;
-
-              x = (this->message.msgData)->createOutput(outbuffer); // x holds the length of the message
-              (this->message.msgData)->_type = OCTSTR;
-              (this->message.msgData)->_length = des_cbc(outbuffer, x, (this->message.msgData)->_content, IV, (unsigned char*) user->privKey, 1);
-              (this->message.msgData)->childrenCount = 0;
-
-              Serial.println("Encrypted Content:");
-              (this->message.msgData)->printContent();
-            }
-
-            x = this->message.msgBody.createOutput(outbuffer); // x holds the length of the message
-
-            if (user->auth == SHA)
-            {
-              lrad_hmac_sha1((unsigned char*) outbuffer, x, (unsigned char*) user->authKey, 20, this->authDigest);
-            }
-            else if (user->auth == MD5)
-            {
-              hmac_md5((unsigned char*) outbuffer, x, (unsigned char*) user->authKey, 16, authDummy); // Auth dummy exists because MD5 functions somehow corrupt the engineID
-              for (x=0; x<12; x++)
-              {
-                this->authDigest[x] = authDummy[x];
-              }
-//#endif // <-------------------------------------------------------------------------------------------------------------ifndef SNMP_V2C  
-            }
-
-          }
-          else // this is the case when we have a decryption error
-          {
-			  // TODO: Check report flag here. If no report, do not report.
-            Serial.println("There's something wrong regarding to decryption >:'(");
-
-			this->v3fillTime();
-            this->decryptionErrors ++; // Increase the unknown engine id counter by one
-			this->v3fillError(3);
-          }
-        } // Check for authentication validity
-        else // Package integrity can not be validated: wrongDigest
-        {
-			// TODO: Check report flag here. If no report, do not report.
-          Serial.println("Wrong digest  :(");
-
-		  this->v3fillTime();
-          this->wrongDigests ++; // Increase the unknown engine id counter by one
-		  this->v3fillError(2);
-        }
-      }
-      else
-      {
-		  // TODO: Check report flag here. If no report, do not report.
-        Serial.println("Problem regarding security levels :(");
-        
 		this->v3fillTime();
-        this->unsupportedSecLevels ++; // Increase the unknown engine id counter by one
+		this->unknownEngineIDs++;
+		this->v3fillError(0);
+	}
+
+	if (!drop && noErrors && (this->ver == 2 || this->v3userExists()))
+	{
+		Serial.println("yayyyyy :D user name also matches");
+		user = v3getUser();
+	}
+	else if (!drop && noErrors)
+	{
+		noErrors = false;
+		// TODO: Check report flag here. If no report, do not report. (i.e. drop)
+		Serial.println("No such user :'(");
+
+		this->v3fillTime();
+		this->unknownUserNames++;
+		this->v3fillError(1);
+	}
+
+	if (!drop && noErrors && (this->ver == 2 || this->v3securityOK(user)))
+	{
+		Serial.println("Security level seems OK");
+	}
+	else if (!drop && noErrors)
+	{
+		noErrors = false;
+		// TODO: Check report flag here. If no report, do not report.
+		Serial.println("Problem regarding security levels :(");
+
+		this->v3fillTime();
+		this->unsupportedSecLevels++;
 		this->v3fillError(4);
-      }
-    }
-    else
-    {
-	  // TODO: Check report flag here. If no report, do not report.
-      Serial.println("No such user :'(");
+	}
 
-	  this->v3fillTime();      
-      this->unknownUserNames ++; // Increase the unknown engine id counter by one
-	  this->v3fillError(1);
-    }
-  }
-  else
-  {
-	  // TODO: Check report flag here. If no report, do not report.
-      Serial.println(">:(");
+	if (!drop && noErrors && (this->ver == 2 || this->v3authValid(user)))
+	{
+		Serial.println("Message is properly authenticated");
+	}
+	else if (!drop && noErrors)
+	{
+		noErrors = false;
+		// TODO: Check report flag here. If no report, do not report.
+		Serial.println("Wrong digest  :(");
 
-	  this->v3fillTime();
-      this->unknownEngineIDs ++; // Increase the unknown engine id counter by one
-	  this->v3fillError(0);
-    }
+		this->v3fillTime();
+		this->wrongDigests++; // Increase the unknown engine id counter by one
+		this->v3fillError(2);
+	}
 
-    this->message.msgBody.createOutput(outbuffer);
-    Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
-    Udp.write(outbuffer,returnInt(outbuffer+1, &x)+x+1);
-    Udp.endPacket();
+	if (!drop && noErrors && (this->ver == 2 || this->v3desOK()))
+	{
+		this->v3decrypt(user);
+
+		if (this->ver == 3 && (user->auth == SHA || user->auth == MD5)) // FIXME: Use flags instead of users
+		{
+			hede = this->message.msgFlags; // Set message flags to no report
+			hede->_content[0] &= 0b00000011; // 0: no auth no priv; 1: auth no priv; 3: auth priv; 2: shouldn't be used
+		}
+		else if (this->ver == 3)
+		{
+			hede = this->message.msgFlags;
+			hede->_content[0] = 0;
+		}
+
+		this->v3fillTime();
+
+	}
+	else if (!drop && noErrors)
+	{
+		noErrors = false;
+		// TODO: Check report flag here. If no report, do not report.
+		Serial.println("There's something wrong regarding to decryption >:'(");
+
+		this->v3fillTime();
+		this->decryptionErrors++; // Increase the unknown engine id counter by one
+		this->v3fillError(3);
+	}
+
+	if (!drop && noErrors && this->v2communityOK())
+	{
+		Serial.println("Community string is OK");
+	}
+	else if (!drop && noErrors)
+	{
+		drop = true;
+	}
+	
+	if (!drop && noErrors && this->requestType() == GET)
+	{
+		Serial.println("kedi");
+		if (this->oidAvailable(this->getOidPos(0), user))
+		{
+			Serial.println("no problems with permissions either");
+
+			x = this->getOidPos(0); // FIXME: do this for all the OID in variable bindings. Not only for the first one.
+
+			hede = this->message.variableBindings;
+			hede = &(hede->children[0]);
+
+			if (this->ver == 2 || ((user->permissions[x] == 1) || ((user->permissions[x] == 2) && ((this->message.msgFlags)->_content[0] & 0b00000001)) || ((user->permissions[x] == 3) && ((this->message.msgFlags)->_content[0] & 0b00000010))))
+			{ // in other words, go into conditional if the user has permission for unauthorized read or has permission for auth read and message is auth-enabled or has permission for priv and the message is priv-enabled.
+				this->fillOidToVarBind(x, 0);
+				hede->printSelf();
+			}
+			else if (this->ver == 3)
+			{
+				hede = this->message.errorStatus;
+				hede->_content[0] = (unsigned char)16; // Authorization Error
+			}
+
+			hede = this->message.data;
+			hede->_type = GETRES; // Outgoing message type is GET response
+		}
+		else
+		{
+			this->gracefulNoOID();
+		}
+	}
+	else if (!drop && noErrors && this->requestType() == GETNEXT)
+	{
+		Serial.println("We have a getnext here!!");
+		x = this->getNext(0, user);
+		//for (x = this->getOidPos(0) + 1; x < this->numberOfObjects && !this->oidAvailable(x, user); x++);
+		if (x == -1)
+		{
+			this->lastOID();
+			Serial.println("'twas already the last item!");
+		}
+		else
+		{
+			Serial.print("next item's position: ");
+			Serial.println(x);
+			this->fillOidToVarBind(x, 0);
+
+			hede = this->message.data;
+			hede->_type = GETRES; // Outgoing message type is GET response
+		}
+		// fill me
+	}
+	else if (noErrors) // because other features are not implemented yet
+	{
+		drop = 1;
+	}
+
+	if (!drop && noErrors) // encrypt back the message
+	{
+		if (this->ver == 3 && ((this->message.msgFlags)->_content[0] & 0b00000010)) // That is, the message needs to be encrypted
+		{
+			for (x = 0; x<8; x++) // Calculating IV using salt and pre-IV
+			{
+				IV[x] = (this->message.msgPrivParam)->_content[x] ^ user->privKey[8 + x];
+			}
+			Serial.println("Doin' encryption...");
+
+			hede = this->message.msgData;
+
+			x = (this->message.msgData)->createOutput(outbuffer); // x holds the length of the message
+			(this->message.msgData)->_type = OCTSTR;
+			(this->message.msgData)->_length = des_cbc(outbuffer, x, (this->message.msgData)->_content, IV, (unsigned char*)user->privKey, 1);
+			(this->message.msgData)->childrenCount = 0;
+
+			Serial.println("Encrypted Content:");
+			(this->message.msgData)->printContent();
+		}
+	}
+
+	if (!drop && noErrors) // auth back the message
+	{
+		x = this->message.msgBody.createOutput(outbuffer); // x holds the length of the message
+
+		if (user->auth == SHA) // FIXME: check message flags, instead of user thingy
+		{
+			lrad_hmac_sha1((unsigned char*)outbuffer, x, (unsigned char*)user->authKey, 20, this->authDigest);
+		}
+		else if (user->auth == MD5)
+		{
+			hmac_md5((unsigned char*)outbuffer, x, (unsigned char*)user->authKey, 16, authDummy); // Auth dummy exists because MD5 functions somehow corrupt the engineID
+			for (x = 0; x<12; x++)
+			{
+				this->authDigest[x] = authDummy[x];
+			}
+		}
+	}
+	  
+	if (!drop)
+	{
+		this->message.msgBody.createOutput(outbuffer);
+		Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+		Udp.write(outbuffer, returnInt(outbuffer + 1, &x) + x + 1);
+		Udp.endPacket();
+	}
 }
 
 void snmpAgent::sendTrapv3(char* receiverIP, unsigned char* oid, int len, const char* userName, authType auth, privType priv)
@@ -1110,3 +1283,45 @@ int oidContainer::returnOID(unsigned char* output)
   return this->oidLength + this->_length + 4; // 2 x 2 for headers.
 }*/
 
+/* SET REQUEST CODE -for future needs :)
+hede = this->message.data;
+if (hede->_type == SETREQ)
+{
+Serial.println("Hooraay! We have a set request here");
+// Check for the community string
+hede = this->message.variableBindings;
+hede = &(hede->children[0]);
+
+hede->children = dummyBinding;
+hede->parseChildren();
+
+hede = &(hede->children[1]);
+
+Serial.println(hede->_type, HEX);
+
+if (hede->_type == OCTSTR)
+{
+Serial.println("ehe =)");
+hede->printContent();
+Serial.println((this->objects[x]).type);
+if ((this->objects[x]).type == OCTSTRING)
+{
+for (y=0; y<hede->_length; y++)
+{
+((unsigned char*) objects[x].content)[y] = (unsigned char) hede->_content[y];
+}
+}
+else
+{
+hede = this->message.errorStatus;
+hede->_content[0] = (unsigned char) 7;
+}
+}
+else
+{
+hede = this->message.errorStatus;
+hede->_content[0] = (unsigned char) 17;
+}
+}
+
+*/
