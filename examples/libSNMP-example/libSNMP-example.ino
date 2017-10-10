@@ -26,7 +26,7 @@ static unsigned char floodSensorOID[]      = {0x2b, 0x06, 0x01, 0x04, 0x01, 0x81
 
 static unsigned char trapReceiverIP1[]     = {0x2b, 0x06, 0x01, 0x04, 0x01, 0x81, 0xb9, 0x26, 0x02, 0x01, 0x01, 0x03, 0x00}; // trapReceiverIPAddress #1 (13)
 
-#include "libSNMP.h"
+#include <libSNMP.h>
 
 #include <SPI.h>         // needed for Arduino versions later than 0018
 #include <Ethernet.h>
